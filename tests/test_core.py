@@ -3,6 +3,7 @@ from sqlalchemy import select
 from app.models import ClientCompany,Contact,Project,ProjectContact,Property,StagedRecord,Unit,VerificationStatus
 from app.search import directory_search, global_search
 from app.importers import map_client_row
+from app.duplicates import annotate_duplicate, find_duplicate
 from conftest import login
 
 def sample(db):
@@ -47,3 +48,18 @@ def test_current_client_row_mapping_and_bundle_approval(client,db):
     assert joseph and joseph.company_id==company.id
     assert company.address.startswith("79 Water Mill") and company.fax=="(516) 216-1363"
     assert joseph.address.startswith("79 Water Mill") and joseph.fax=="(516) 216-1363"
+
+def test_duplicate_detection_and_manual_merge(client,db):
+    company=ClientCompany(company_name="ABC Construction LLC")
+    existing=Contact(first_name="Mike",last_name="Chen",display_name="Mike Chen",phone="917-555-1234",phone_normalized="9175551234",company=company)
+    db.add(existing); db.commit()
+    payload={"display_name":"Michael Chen","first_name":"Michael","last_name":"Chen","company_name":"ABC Construction","phone":"(917) 555-1234","email":"mike@example.com","role":"GC","notes":"Met at site"}
+    record=StagedRecord(entity_type="client_bundle",payload_json=json.dumps(payload),source_type="EXCEL",source_reference="intake.xlsx")
+    annotate_duplicate(db,record,payload); db.add(record); db.commit()
+    assert record.duplicate_contact_id==existing.id
+    assert "Exact normalized phone match" in json.loads(record.duplicate_reasons)
+    login(client); assert client.post(f"/admin/staged/{record.id}/merge").status_code==200
+    db.expire_all(); existing=db.get(Contact,existing.id); record=db.get(StagedRecord,record.id)
+    assert existing.display_name=="Mike Chen"  # merge preserves populated values
+    assert existing.email=="mike@example.com" and existing.notes=="Met at site"
+    assert record.status==VerificationStatus.VERIFIED and "Merged" in record.review_notes

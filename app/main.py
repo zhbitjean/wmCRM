@@ -12,6 +12,7 @@ from .auth import current_user, make_token, office_user, verify_password
 from .database import get_db
 from .models import ClientCompany, Contact, Project, ProjectContact, Property, StagedRecord, Unit, User, VerificationStatus
 from .importers import parse_csv, parse_current_client_xlsx
+from .duplicates import annotate_duplicate
 from .schemas import CompanyCreate, CompanyOut
 from .search import digits, directory_search, global_search
 
@@ -62,7 +63,8 @@ def property_detail(property_id:int,request:Request,db:Session=Depends(get_db),u
 @app.get("/admin",response_class=HTMLResponse)
 def admin(request:Request,db:Session=Depends(get_db),user:User=Depends(office_user)):
     companies=db.scalars(select(ClientCompany).order_by(ClientCompany.company_name)).all(); contacts=db.scalars(select(Contact).order_by(Contact.display_name)).all(); properties=db.scalars(select(Property).order_by(Property.street_address)).all(); staged=db.scalars(select(StagedRecord).order_by(StagedRecord.imported_at.desc())).all()
-    return templates.TemplateResponse(request,"admin.html",{"user":user,"companies":companies,"contacts":contacts,"properties":properties,"staged":staged})
+    review_items=[{"record":r,"payload":json.loads(r.payload_json),"reasons":json.loads(r.duplicate_reasons) if r.duplicate_reasons else []} for r in staged]
+    return templates.TemplateResponse(request,"admin.html",{"user":user,"companies":companies,"contacts":contacts,"properties":properties,"review_items":review_items})
 @app.post("/admin/companies")
 def add_company(company_name:str=Form(),phone:str|None=Form(None),email:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
     db.add(ClientCompany(company_name=company_name,phone=phone,email=email,created_by=user.email,updated_by=user.email)); db.commit(); return RedirectResponse("/admin",303)
@@ -81,11 +83,13 @@ async def import_file(file:UploadFile=File(),db:Session=Depends(get_db),user:Use
     try:
         if suffix==".xlsx":
             rows,skipped=parse_current_client_xlsx(content); source_type="EXCEL"
-            for row in rows: db.add(StagedRecord(entity_type="client_bundle",payload_json=json.dumps(row),source_type=source_type,source_reference=f"{file.filename} / current client list",created_by=user.email))
+            for row in rows:
+                record=StagedRecord(entity_type="client_bundle",payload_json=json.dumps(row),source_type=source_type,source_reference=f"{file.filename} / current client list",created_by=user.email); db.add(annotate_duplicate(db,record,row))
         elif suffix==".csv":
             rows=parse_csv(content); skipped=[]; source_type="CSV"
             for row in rows:
-                kind=(row.pop("entity_type",None) or "contact").lower(); db.add(StagedRecord(entity_type=kind,payload_json=json.dumps(row),source_type=source_type,source_reference=file.filename,created_by=user.email))
+                kind=(row.pop("entity_type",None) or "contact").lower(); record=StagedRecord(entity_type=kind,payload_json=json.dumps(row),source_type=source_type,source_reference=file.filename,created_by=user.email)
+                db.add(annotate_duplicate(db,record,row) if kind=="contact" else record)
         else: raise ValueError("Upload an .xlsx or .csv file")
     except (ValueError,UnicodeDecodeError) as exc:
         return RedirectResponse(f"/admin?import_error={quote(str(exc))}",303)
@@ -94,8 +98,19 @@ async def import_file(file:UploadFile=File(),db:Session=Depends(get_db),user:Use
 def review(record_id:int,action:str,db:Session=Depends(get_db),user:User=Depends(office_user)):
     r=db.get(StagedRecord,record_id)
     if not r: raise HTTPException(404)
-    if action=="reject": r.status=VerificationStatus.REJECTED
+    if action in ("reject","skip"):
+        r.status=VerificationStatus.REJECTED; r.review_notes="Skipped as possible duplicate" if action=="skip" else "Rejected by reviewer"
     elif action=="needs-correction": r.status=VerificationStatus.NEEDS_CORRECTION
+    elif action in ("update-existing","merge"):
+        if r.entity_type.lower()!="client_bundle" or not r.duplicate_contact_id: raise HTTPException(400,"No existing contact candidate is available")
+        data=json.loads(r.payload_json); contact=db.get(Contact,r.duplicate_contact_id)
+        fields={"display_name":data.get("display_name"),"nickname":data.get("nickname"),"role":data.get("role"),"phone":data.get("phone"),"alternate_phone":data.get("alternate_phone"),"fax":data.get("fax"),"email":data.get("email"),"address":data.get("address"),"notes":data.get("notes")}
+        for key,value in fields.items():
+            if value is not None and (action=="update-existing" or not getattr(contact,key,None)): setattr(contact,key,value)
+        contact.phone_normalized=digits(contact.phone or "")
+        if not contact.company_id and r.duplicate_company_id: contact.company_id=r.duplicate_company_id
+        contact.verification_status=VerificationStatus.VERIFIED; contact.last_verified_at=datetime.now(timezone.utc); contact.updated_by=user.email
+        r.status=VerificationStatus.VERIFIED; r.review_notes="Updated existing contact" if action=="update-existing" else "Merged missing fields into existing contact"
     elif action=="approve":
         data=json.loads(r.payload_json); kind=r.entity_type.lower()
         if kind=="company": db.add(ClientCompany(company_name=data["company_name"],alternate_name=data.get("alternate_name"),phone=data.get("phone"),fax=data.get("fax"),email=data.get("email"),address=data.get("address"),notes=data.get("notes"),created_by=user.email))

@@ -61,6 +61,7 @@ For quick local evaluation, `DATABASE_URL=sqlite:///./wmcrm.db` is supported. Pr
 - Uploading `WM Client list.xlsx` reads the `current client list` tab directly and stages complete client rows. Name, nickname, company, address, office/fax/cell phones, notes, and email are mapped; placeholder `-` values are treated as blank.
 - CSV rows require `entity_type` (`contact` or `company`). All uploads become `PENDING`. Approve creates verified production rows; reject and needs-correction do not.
 - Imports preserve source filename/type, timestamps, reviewer, and status. Rows without a legal name are skipped and reported instead of creating ambiguous contacts.
+- Import review deterministically flags exact normalized phone/email matches, similar names within the same company, and similar company names. Reviewers explicitly choose Create New, Update Existing, Merge Missing Fields, or Skip; uncertain records are never merged automatically.
 
 API documentation is at <http://localhost:8000/docs>.
 
