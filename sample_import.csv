@@ -1,3 +1,3 @@
-entity_type,company_name,first_name,last_name,display_name,phone,email,role
-contact,,Jane,Doe,Jane Doe,718-555-9000,jane@example.com,Owner Representative
-company,Sample Development LLC,,,,212-555-0200,info@sample.example,
+entity_type,company_name,first_name,last_name,display_name,nickname,phone,email,role
+contact,,Jane,Doe,Jane Doe,Janie,718-555-9000,jane@example.com,Owner Representative
+company,Sample Development LLC,,,,,212-555-0200,info@sample.example,

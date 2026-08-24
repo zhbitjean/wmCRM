@@ -35,7 +35,7 @@ tests/          relationships, search, RBAC, import approval
 3. Run `docker compose up --build`.
 4. Open <http://localhost:8000>. Startup migrates and seeds the database. Sign in using an account configured in `.env`.
 
-The sample project supports searches including `155 Stuy`, `1K`, `David`, `ABC Development`, `917-555-1234`, and `gmail.com`.
+Search accepts partial addresses, units, legal names, nicknames, companies, project names, phone numbers, and emails.
 
 ## Run without Docker
 
@@ -80,4 +80,3 @@ Before a shared or production deployment:
 ## MVP boundary
 
 The app intentionally uses broad SQL matching and normalized phone digits rather than Elasticsearch. Roles are strings, so new roles require no migration. Staging is source-neutral, allowing future document/email/AI proposals without direct writes to trusted tables. Full event audit history, password administration, bulk project/property editors, trigram ranking, and public-record integrations are later increments.
-

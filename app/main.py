@@ -65,13 +65,13 @@ def admin(request:Request,db:Session=Depends(get_db),user:User=Depends(office_us
 def add_company(company_name:str=Form(),phone:str|None=Form(None),email:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
     db.add(ClientCompany(company_name=company_name,phone=phone,email=email,created_by=user.email,updated_by=user.email)); db.commit(); return RedirectResponse("/admin",303)
 @app.post("/admin/contacts")
-def add_contact(first_name:str=Form(),last_name:str=Form(),role:str=Form("Other"),phone:str|None=Form(None),email:str|None=Form(None),company_id:int|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
-    db.add(Contact(first_name=first_name,last_name=last_name,display_name=f"{first_name} {last_name}".strip(),role=role,phone=phone,phone_normalized=digits(phone or ""),email=email,company_id=company_id,created_by=user.email,updated_by=user.email)); db.commit(); return RedirectResponse("/admin",303)
+def add_contact(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),email:str|None=Form(None),company_id:int|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    db.add(Contact(first_name=first_name,last_name=last_name,display_name=f"{first_name} {last_name}".strip(),nickname=nickname or None,role=role,phone=phone,phone_normalized=digits(phone or ""),email=email,company_id=company_id,created_by=user.email,updated_by=user.email)); db.commit(); return RedirectResponse("/admin",303)
 @app.post("/admin/contacts/{contact_id}")
-def update_contact(contact_id:int,display_name:str=Form(),role:str=Form("Other"),phone:str|None=Form(None),email:str|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+def update_contact(contact_id:int,display_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),email:str|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
     c=db.get(Contact,contact_id)
     if not c: raise HTTPException(404)
-    c.display_name=display_name; c.role=role; c.phone=phone; c.phone_normalized=digits(phone or ""); c.email=email; c.notes=notes; c.updated_by=user.email
+    c.display_name=display_name; c.nickname=nickname or None; c.role=role; c.phone=phone; c.phone_normalized=digits(phone or ""); c.email=email; c.notes=notes; c.updated_by=user.email
     db.commit(); return RedirectResponse(f"/contacts/{contact_id}",303)
 @app.post("/admin/import")
 async def import_csv(file:UploadFile=File(),db:Session=Depends(get_db),user:User=Depends(office_user)):
@@ -90,7 +90,7 @@ def review(record_id:int,action:str,db:Session=Depends(get_db),user:User=Depends
         if kind=="company": db.add(ClientCompany(company_name=data["company_name"],alternate_name=data.get("alternate_name"),phone=data.get("phone"),email=data.get("email"),notes=data.get("notes"),created_by=user.email))
         elif kind=="contact":
             first=data.get("first_name",""); last=data.get("last_name",""); phone=data.get("phone")
-            db.add(Contact(first_name=first,last_name=last,display_name=data.get("display_name") or f"{first} {last}".strip(),role=data.get("role","Other"),phone=phone,phone_normalized=digits(phone or ""),email=data.get("email"),verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email))
+            db.add(Contact(first_name=first,last_name=last,display_name=data.get("display_name") or f"{first} {last}".strip(),nickname=data.get("nickname") or None,role=data.get("role","Other"),phone=phone,phone_normalized=digits(phone or ""),email=data.get("email"),verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email))
         else: raise HTTPException(400,"MVP approval supports contact and company records")
         r.status=VerificationStatus.VERIFIED
     else: raise HTTPException(400,"Unknown action")

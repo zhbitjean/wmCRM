@@ -6,8 +6,7 @@ from .models import ClientCompany, Contact, Project, ProjectContact, Property, U
 def digits(value: str): return re.sub(r"\D", "", value or "")
 def global_search(db: Session, query: str):
     q=query.strip(); pattern=f"%{q}%"; phone=digits(q)
-    filters=[Project.project_name.ilike(pattern),Property.street_address.ilike(pattern),Property.address_line_2.ilike(pattern),Property.city.ilike(pattern),Property.building_name.ilike(pattern),Unit.unit_number.ilike(pattern),ClientCompany.company_name.ilike(pattern),ClientCompany.alternate_name.ilike(pattern),Contact.display_name.ilike(pattern),Contact.email.ilike(pattern),Contact.phone.ilike(pattern)]
+    filters=[Project.project_name.ilike(pattern),Property.street_address.ilike(pattern),Property.address_line_2.ilike(pattern),Property.city.ilike(pattern),Property.building_name.ilike(pattern),Unit.unit_number.ilike(pattern),ClientCompany.company_name.ilike(pattern),ClientCompany.alternate_name.ilike(pattern),Contact.display_name.ilike(pattern),Contact.nickname.ilike(pattern),Contact.email.ilike(pattern),Contact.phone.ilike(pattern)]
     if phone: filters.append(Contact.phone_normalized.ilike(f"%{phone}%"))
     stmt=(select(Project).outerjoin(Property).outerjoin(Unit,Project.unit_id==Unit.id).outerjoin(ClientCompany).outerjoin(ProjectContact).outerjoin(Contact).where(or_(*filters)).options(joinedload(Project.property),joinedload(Project.unit),joinedload(Project.client_company),joinedload(Project.contact_links).joinedload(ProjectContact.contact)).distinct())
     return db.execute(stmt).unique().scalars().all()
-
