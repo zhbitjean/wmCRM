@@ -6,11 +6,11 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 from .auth import current_user, make_token, office_user, verify_password
 from .database import get_db
-from .models import ClientCompany, Contact, Project, ProjectContact, Property, StagedRecord, Unit, User, VerificationStatus
+from .models import ClientCompany, Contact, Project, ProjectCompany, ProjectContact, Property, StagedRecord, Unit, User, VerificationStatus
 from .importers import parse_csv, parse_current_client_xlsx
 from .duplicates import annotate_duplicate
 from .geography import BOROUGHS, infer_nyc_borough
@@ -40,14 +40,67 @@ def logout():
 def home(request:Request,q:str="",db:Session=Depends(get_db),user:User=Depends(current_user)):
     results=global_search(db,q) if q.strip() else []; contacts,companies=directory_search(db,q) if q.strip() else ([],[])
     return templates.TemplateResponse(request,"home.html",{"q":q,"results":results,"contacts":contacts,"companies":companies,"total_results":len(results)+len(contacts)+len(companies),"user":user})
+@app.get("/projects",response_class=HTMLResponse)
+def project_list(request:Request,q:str="",status:str="",borough:str="",db:Session=Depends(get_db),user:User=Depends(current_user)):
+    stmt=select(Project).join(Property).options(joinedload(Project.property),joinedload(Project.unit),joinedload(Project.client_company),joinedload(Project.contact_links))
+    if q.strip():
+        pattern=f"%{q.strip()}%"; stmt=stmt.where(or_(Project.project_name.ilike(pattern),Property.street_address.ilike(pattern),Property.city.ilike(pattern)))
+    if status: stmt=stmt.where(Project.status==status)
+    if borough: stmt=stmt.where(Property.borough==borough)
+    projects=db.execute(stmt.order_by(Project.updated_at.desc())).unique().scalars().all()
+    statuses=db.scalars(select(Project.status).distinct().order_by(Project.status)).all()
+    return templates.TemplateResponse(request,"projects.html",{"projects":projects,"q":q,"selected_status":status,"selected_borough":borough,"statuses":statuses,"boroughs":BOROUGHS,"user":user})
+@app.get("/projects/new",response_class=HTMLResponse)
+def new_project_page(request:Request,db:Session=Depends(get_db),user:User=Depends(office_user)):
+    companies=db.scalars(select(ClientCompany).order_by(ClientCompany.company_name)).all()
+    return templates.TemplateResponse(request,"project_form.html",{"companies":companies,"boroughs":BOROUGHS,"user":user})
+@app.post("/projects/new")
+def create_project_direct(project_name:str=Form(),street_address:str=Form(),city:str=Form(),state:str=Form("NY"),zip_code:str=Form(""),borough:str|None=Form(None),unit_number:str|None=Form(None),project_type:str|None=Form(None),status:str=Form("Active"),client_company_id:int|None=Form(None),description:str|None=Form(None),internal_notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    chosen_borough=borough or infer_nyc_borough(f"{street_address}, {city}, {state}")
+    property_row=Property(street_address=street_address.strip(),city=city.strip(),borough=chosen_borough,state=state.strip().upper(),zip_code=zip_code.strip(),created_by=user.email,updated_by=user.email)
+    unit=Unit(property=property_row,unit_number=unit_number.strip()) if unit_number and unit_number.strip() else None
+    project=Project(project_name=project_name.strip(),client_company_id=client_company_id,property=property_row,unit=unit,project_type=project_type or None,status=status,description=description or None,internal_notes=internal_notes or None,created_by=user.email,updated_by=user.email)
+    if client_company_id: project.company_links.append(ProjectCompany(company_id=client_company_id,project_role="Client",created_by=user.email,updated_by=user.email))
+    db.add(project); db.commit(); db.refresh(project); return RedirectResponse(f"/projects/{project.id}",303)
 @app.get("/projects/{project_id}",response_class=HTMLResponse)
 def project_detail(project_id:int,request:Request,db:Session=Depends(get_db),user:User=Depends(current_user)):
-    p=db.scalar(select(Project).where(Project.id==project_id).options(joinedload(Project.property),joinedload(Project.unit),joinedload(Project.client_company),joinedload(Project.contact_links).joinedload(ProjectContact.contact).joinedload(Contact.company)))
+    p=db.execute(select(Project).where(Project.id==project_id).options(joinedload(Project.property),joinedload(Project.unit),joinedload(Project.client_company),joinedload(Project.contact_links).joinedload(ProjectContact.contact).joinedload(Contact.company),joinedload(Project.company_links).joinedload(ProjectCompany.company))).unique().scalar_one_or_none()
     if not p: raise HTTPException(404)
-    return templates.TemplateResponse(request,"project.html",{"p":p,"user":user})
+    contacts=db.scalars(select(Contact).where(Contact.active==True).order_by(Contact.display_name)).all() if user.role.value in ("ADMIN","OFFICE_USER") else []
+    companies=db.scalars(select(ClientCompany).where(ClientCompany.active==True).order_by(ClientCompany.company_name)).all() if user.role.value in ("ADMIN","OFFICE_USER") else []
+    return templates.TemplateResponse(request,"project.html",{"p":p,"contacts":contacts,"companies":companies,"user":user})
+@app.post("/projects/{project_id}/contacts")
+def add_project_contact(project_id:int,contact_id:int=Form(),project_role:str=Form(),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    if not db.get(Project,project_id) or not db.get(Contact,contact_id): raise HTTPException(404)
+    exists=db.scalar(select(ProjectContact).where(ProjectContact.project_id==project_id,ProjectContact.contact_id==contact_id,ProjectContact.project_role==project_role))
+    if not exists: db.add(ProjectContact(project_id=project_id,contact_id=contact_id,project_role=project_role.strip(),notes=notes or None,created_by=user.email,updated_by=user.email)); db.commit()
+    return RedirectResponse(f"/projects/{project_id}",303)
+@app.post("/projects/{project_id}/companies")
+def add_project_company(project_id:int,company_id:int=Form(),project_role:str=Form(),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    if not db.get(Project,project_id) or not db.get(ClientCompany,company_id): raise HTTPException(404)
+    exists=db.scalar(select(ProjectCompany).where(ProjectCompany.project_id==project_id,ProjectCompany.company_id==company_id,ProjectCompany.project_role==project_role))
+    if not exists: db.add(ProjectCompany(project_id=project_id,company_id=company_id,project_role=project_role.strip(),notes=notes or None,created_by=user.email,updated_by=user.email)); db.commit()
+    return RedirectResponse(f"/projects/{project_id}",303)
+@app.get("/contacts",response_class=HTMLResponse)
+def contact_list(request:Request,q:str="",db:Session=Depends(get_db),user:User=Depends(current_user)):
+    stmt=select(Contact).options(joinedload(Contact.company)).order_by(Contact.display_name)
+    if q.strip(): stmt=stmt.where(or_(Contact.display_name.ilike(f"%{q}%"),Contact.nickname.ilike(f"%{q}%"),Contact.phone.ilike(f"%{q}%"),Contact.email.ilike(f"%{q}%")))
+    return templates.TemplateResponse(request,"contacts.html",{"contacts":db.execute(stmt).unique().scalars().all(),"q":q,"user":user})
+@app.get("/companies",response_class=HTMLResponse)
+def company_list(request:Request,q:str="",db:Session=Depends(get_db),user:User=Depends(current_user)):
+    stmt=select(ClientCompany).order_by(ClientCompany.company_name)
+    if q.strip(): stmt=stmt.where(or_(ClientCompany.company_name.ilike(f"%{q}%"),ClientCompany.phone.ilike(f"%{q}%"),ClientCompany.email.ilike(f"%{q}%")))
+    return templates.TemplateResponse(request,"companies.html",{"companies":db.scalars(stmt).all(),"q":q,"user":user})
+@app.get("/companies/new",response_class=HTMLResponse)
+def new_company_page(request:Request,user:User=Depends(office_user)):
+    return templates.TemplateResponse(request,"company_form.html",{"boroughs":BOROUGHS,"user":user})
+@app.post("/companies/new")
+def create_company_direct(company_name:str=Form(),alternate_name:str|None=Form(None),phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),borough:str|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    company=ClientCompany(company_name=company_name.strip(),alternate_name=alternate_name or None,phone=phone or None,fax=fax or None,email=email or None,address=address or None,borough=borough or infer_nyc_borough(address),notes=notes or None,created_by=user.email,updated_by=user.email)
+    db.add(company); db.commit(); db.refresh(company); return RedirectResponse(f"/companies/{company.id}",303)
 @app.get("/companies/{company_id}",response_class=HTMLResponse)
 def company_detail(company_id:int,request:Request,db:Session=Depends(get_db),user:User=Depends(current_user)):
-    c=db.execute(select(ClientCompany).where(ClientCompany.id==company_id).options(joinedload(ClientCompany.contacts),joinedload(ClientCompany.projects).joinedload(Project.property))).unique().scalar_one_or_none()
+    c=db.execute(select(ClientCompany).where(ClientCompany.id==company_id).options(joinedload(ClientCompany.contacts),joinedload(ClientCompany.projects).joinedload(Project.property),joinedload(ClientCompany.project_links).joinedload(ProjectCompany.project).joinedload(Project.property))).unique().scalar_one_or_none()
     if not c: raise HTTPException(404)
     return templates.TemplateResponse(request,"company.html",{"c":c,"user":user})
 @app.get("/contacts/new",response_class=HTMLResponse)
@@ -71,9 +124,9 @@ def property_detail(property_id:int,request:Request,db:Session=Depends(get_db),u
 
 @app.get("/admin",response_class=HTMLResponse)
 def admin(request:Request,db:Session=Depends(get_db),user:User=Depends(office_user)):
-    companies=db.scalars(select(ClientCompany).order_by(ClientCompany.company_name)).all(); contacts=db.scalars(select(Contact).order_by(Contact.display_name)).all(); properties=db.scalars(select(Property).order_by(Property.street_address)).all(); staged=db.scalars(select(StagedRecord).order_by(StagedRecord.imported_at.desc())).all()
+    staged=db.scalars(select(StagedRecord).order_by(StagedRecord.imported_at.desc())).all()
     review_items=[{"record":r,"payload":json.loads(r.payload_json),"reasons":json.loads(r.duplicate_reasons) if r.duplicate_reasons else []} for r in staged]
-    return templates.TemplateResponse(request,"admin.html",{"user":user,"companies":companies,"contacts":contacts,"properties":properties,"review_items":review_items})
+    return templates.TemplateResponse(request,"admin.html",{"user":user,"review_items":review_items})
 @app.post("/admin/companies")
 def add_company(company_name:str=Form(),phone:str|None=Form(None),email:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
     db.add(ClientCompany(company_name=company_name,phone=phone,email=email,created_by=user.email,updated_by=user.email)); db.commit(); return RedirectResponse("/admin",303)

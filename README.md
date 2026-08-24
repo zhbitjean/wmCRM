@@ -58,6 +58,8 @@ For quick local evaluation, `DATABASE_URL=sqlite:///./wmcrm.db` is supported. Pr
 
 - `FIELD_USER`: global search and detail screens; phone and email links open the device dialer/mail app.
 - `OFFICE_USER` or `ADMIN`: field access plus `/admin`, contact corrections, CSV upload, and review actions.
+- Daily project work lives at `/projects`. Office users can create a property/project, choose an initial client, then assign multiple people and companies with project-specific roles such as Site Contact, Superintendent, GC, Architect, or Engineer.
+- Contacts and companies have dedicated searchable directory pages. Admin is reserved for imports, duplicate review, and data verification.
 - Uploading `WM Client list.xlsx` reads the `current client list` tab directly and stages complete client rows. Name, nickname, company, address, office/fax/cell phones, notes, and email are mapped; placeholder `-` values are treated as blank.
 - CSV rows require `entity_type` (`contact` or `company`). All uploads become `PENDING`. Approve creates verified production rows; reject and needs-correction do not.
 - Imports preserve source filename/type, timestamps, reviewer, and status. Rows without a legal name are skipped and reported instead of creating ambiguous contacts.

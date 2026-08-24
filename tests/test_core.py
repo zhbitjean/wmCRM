@@ -1,6 +1,6 @@
 import io, json
 from sqlalchemy import select
-from app.models import ClientCompany,Contact,Project,ProjectContact,Property,StagedRecord,Unit,VerificationStatus
+from app.models import ClientCompany,Contact,Project,ProjectCompany,ProjectContact,Property,StagedRecord,Unit,VerificationStatus
 from app.search import directory_search, global_search
 from app.importers import map_client_row
 from app.duplicates import annotate_duplicate, find_duplicate
@@ -80,3 +80,17 @@ def test_duplicate_detection_and_manual_merge(client,db):
     assert existing.display_name=="Mike Chen"  # merge preserves populated values
     assert existing.email=="mike@example.com" and existing.notes=="Met at site"
     assert record.status==VerificationStatus.VERIFIED and "Merged" in record.review_notes
+
+def test_project_first_creation_and_role_assignment(client,db):
+    company=ClientCompany(company_name="XYZ Construction")
+    contact=Contact(first_name="Dave",last_name="Miller",display_name="Dave Miller",phone="212-555-0101",phone_normalized="2125550101")
+    db.add_all([company,contact]); db.commit(); login(client)
+    response=client.post("/projects/new",data={"project_name":"Amsterdam Renovation","street_address":"2600 Amsterdam Ave","city":"New York","state":"NY","zip_code":"10040","borough":"Manhattan","project_type":"Renovation","status":"Active","client_company_id":company.id},follow_redirects=False)
+    assert response.status_code==303
+    db.expire_all(); project=db.scalar(select(Project).where(Project.project_name=="Amsterdam Renovation"))
+    assert project.property.street_address=="2600 Amsterdam Ave" and project.property.borough=="Manhattan"
+    assert db.scalar(select(ProjectCompany).where(ProjectCompany.project_id==project.id,ProjectCompany.company_id==company.id,ProjectCompany.project_role=="Client"))
+    assert client.post(f"/projects/{project.id}/contacts",data={"contact_id":contact.id,"project_role":"Site Contact"}).status_code==200
+    assert client.post(f"/projects/{project.id}/companies",data={"company_id":company.id,"project_role":"GC"}).status_code==200
+    db.expire_all(); assert db.scalar(select(ProjectContact).where(ProjectContact.project_id==project.id,ProjectContact.contact_id==contact.id,ProjectContact.project_role=="Site Contact"))
+    assert db.scalar(select(ProjectCompany).where(ProjectCompany.project_id==project.id,ProjectCompany.company_id==company.id,ProjectCompany.project_role=="GC"))
