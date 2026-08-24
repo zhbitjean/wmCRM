@@ -35,7 +35,7 @@ def test_field_user_cannot_write(client):
 def test_admin_can_add_contact_directly(client,db):
     login(client)
     assert client.get("/contacts/new").status_code==200
-    response=client.post("/contacts/new",data={"first_name":"Dave","last_name":"Miller","nickname":"D","role":"Site Contact","phone":"212-555-0199","email":"dave@example.com","address":"2600 Amsterdam Ave, New York, NY","borough":"Manhattan","notes":"Secondary person in charge"},follow_redirects=False)
+    response=client.post("/contacts/new",data={"first_name":"Dave","last_name":"Miller","nickname":"D","role":"Site Contact","phone":"212-555-0199","email":"dave@example.com","address":"2600 Amsterdam Ave, New York, NY","borough":"Manhattan","company_id":"","notes":"Secondary person in charge"},follow_redirects=False)
     assert response.status_code==303 and response.headers["location"].startswith("/contacts/")
     db.expire_all(); dave=db.scalar(select(Contact).where(Contact.email=="dave@example.com"))
     assert dave and dave.display_name=="Dave Miller" and dave.borough=="Manhattan" and dave.verification_status==VerificationStatus.VERIFIED
@@ -94,3 +94,11 @@ def test_project_first_creation_and_role_assignment(client,db):
     assert client.post(f"/projects/{project.id}/companies",data={"company_id":company.id,"project_role":"GC"}).status_code==200
     db.expire_all(); assert db.scalar(select(ProjectContact).where(ProjectContact.project_id==project.id,ProjectContact.contact_id==contact.id,ProjectContact.project_role=="Site Contact"))
     assert db.scalar(select(ProjectCompany).where(ProjectCompany.project_id==project.id,ProjectCompany.company_id==company.id,ProjectCompany.project_role=="GC"))
+
+def test_project_can_be_created_without_a_client_company(client,db):
+    login(client)
+    response=client.post("/projects/new",data={"project_name":"Unassigned Job","street_address":"100 Main St","city":"Flushing","state":"NY","zip_code":"11354","borough":"Queens","status":"Active","client_company_id":""},follow_redirects=False)
+    assert response.status_code==303
+    db.expire_all(); project=db.scalar(select(Project).where(Project.project_name=="Unassigned Job"))
+    assert project and project.client_company_id is None
+    assert not db.scalar(select(ProjectCompany).where(ProjectCompany.project_id==project.id))

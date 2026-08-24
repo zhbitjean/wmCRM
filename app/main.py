@@ -22,6 +22,9 @@ BASE=Path(__file__).parent
 app.mount("/static",StaticFiles(directory=BASE/"static"),name="static")
 templates=Jinja2Templates(directory=BASE/"templates")
 
+def optional_form_int(value:str|None)->int|None:
+    return int(value) if value not in (None, "") else None
+
 @app.exception_handler(401)
 def unauthorized(request, exc): return RedirectResponse("/login",303)
 @app.get("/health")
@@ -55,7 +58,8 @@ def new_project_page(request:Request,db:Session=Depends(get_db),user:User=Depend
     companies=db.scalars(select(ClientCompany).order_by(ClientCompany.company_name)).all()
     return templates.TemplateResponse(request,"project_form.html",{"companies":companies,"boroughs":BOROUGHS,"user":user})
 @app.post("/projects/new")
-def create_project_direct(project_name:str=Form(),street_address:str=Form(),city:str=Form(),state:str=Form("NY"),zip_code:str=Form(""),borough:str|None=Form(None),unit_number:str|None=Form(None),project_type:str|None=Form(None),status:str=Form("Active"),client_company_id:int|None=Form(None),description:str|None=Form(None),internal_notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+def create_project_direct(project_name:str=Form(),street_address:str=Form(),city:str=Form(),state:str=Form("NY"),zip_code:str=Form(""),borough:str|None=Form(None),unit_number:str|None=Form(None),project_type:str|None=Form(None),status:str=Form("Active"),client_company_id:str|None=Form(None),description:str|None=Form(None),internal_notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    client_company_id=optional_form_int(client_company_id)
     chosen_borough=borough or infer_nyc_borough(f"{street_address}, {city}, {state}")
     property_row=Property(street_address=street_address.strip(),city=city.strip(),borough=chosen_borough,state=state.strip().upper(),zip_code=zip_code.strip(),created_by=user.email,updated_by=user.email)
     unit=Unit(property=property_row,unit_number=unit_number.strip()) if unit_number and unit_number.strip() else None
@@ -108,7 +112,8 @@ def new_contact_page(request:Request,db:Session=Depends(get_db),user:User=Depend
     companies=db.scalars(select(ClientCompany).order_by(ClientCompany.company_name)).all()
     return templates.TemplateResponse(request,"contact_form.html",{"companies":companies,"boroughs":BOROUGHS,"user":user})
 @app.post("/contacts/new")
-def create_contact_direct(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),alternate_phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),borough:str|None=Form(None),company_id:int|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+def create_contact_direct(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),alternate_phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),borough:str|None=Form(None),company_id:str|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    company_id=optional_form_int(company_id)
     contact=Contact(first_name=first_name.strip(),last_name=last_name.strip(),display_name=f"{first_name.strip()} {last_name.strip()}".strip(),nickname=nickname or None,role=role or "Other",phone=phone or None,phone_normalized=digits(phone or ""),alternate_phone=alternate_phone or None,fax=fax or None,email=email or None,address=address or None,borough=borough or infer_nyc_borough(address),company_id=company_id,notes=notes or None,verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email,updated_by=user.email)
     db.add(contact); db.commit(); db.refresh(contact); return RedirectResponse(f"/contacts/{contact.id}",303)
 @app.get("/contacts/{contact_id}",response_class=HTMLResponse)
@@ -131,7 +136,8 @@ def admin(request:Request,db:Session=Depends(get_db),user:User=Depends(office_us
 def add_company(company_name:str=Form(),phone:str|None=Form(None),email:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
     db.add(ClientCompany(company_name=company_name,phone=phone,email=email,created_by=user.email,updated_by=user.email)); db.commit(); return RedirectResponse("/admin",303)
 @app.post("/admin/contacts")
-def add_contact(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),email:str|None=Form(None),company_id:int|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+def add_contact(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),email:str|None=Form(None),company_id:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    company_id=optional_form_int(company_id)
     db.add(Contact(first_name=first_name,last_name=last_name,display_name=f"{first_name} {last_name}".strip(),nickname=nickname or None,role=role,phone=phone,phone_normalized=digits(phone or ""),email=email,company_id=company_id,created_by=user.email,updated_by=user.email)); db.commit(); return RedirectResponse("/admin",303)
 @app.post("/admin/contacts/{contact_id}")
 def update_contact(contact_id:int,display_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),borough:str|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
