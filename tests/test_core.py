@@ -29,6 +29,15 @@ def test_field_user_cannot_write(client):
     login(client,"field@test.com")
     assert client.get("/?q=155").status_code==200
     assert client.post("/admin/companies",data={"company_name":"Nope"}).status_code==403
+    assert client.get("/contacts/new").status_code==403
+
+def test_admin_can_add_contact_directly(client,db):
+    login(client)
+    assert client.get("/contacts/new").status_code==200
+    response=client.post("/contacts/new",data={"first_name":"Dave","last_name":"Miller","nickname":"D","role":"Site Contact","phone":"212-555-0199","email":"dave@example.com","address":"2600 Amsterdam Ave, New York, NY","notes":"Secondary person in charge"},follow_redirects=False)
+    assert response.status_code==303 and response.headers["location"].startswith("/contacts/")
+    db.expire_all(); dave=db.scalar(select(Contact).where(Contact.email=="dave@example.com"))
+    assert dave and dave.display_name=="Dave Miller" and dave.verification_status==VerificationStatus.VERIFIED
 def test_csv_review_and_approval(client,db):
     login(client)
     csv=b"entity_type,first_name,last_name,phone,email,role\ncontact,Jane,Doe,718-555-9000,jane@example.com,Owner\n"

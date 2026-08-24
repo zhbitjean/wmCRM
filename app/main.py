@@ -49,6 +49,14 @@ def company_detail(company_id:int,request:Request,db:Session=Depends(get_db),use
     c=db.execute(select(ClientCompany).where(ClientCompany.id==company_id).options(joinedload(ClientCompany.contacts),joinedload(ClientCompany.projects).joinedload(Project.property))).unique().scalar_one_or_none()
     if not c: raise HTTPException(404)
     return templates.TemplateResponse(request,"company.html",{"c":c,"user":user})
+@app.get("/contacts/new",response_class=HTMLResponse)
+def new_contact_page(request:Request,db:Session=Depends(get_db),user:User=Depends(office_user)):
+    companies=db.scalars(select(ClientCompany).order_by(ClientCompany.company_name)).all()
+    return templates.TemplateResponse(request,"contact_form.html",{"companies":companies,"user":user})
+@app.post("/contacts/new")
+def create_contact_direct(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),alternate_phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),company_id:int|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    contact=Contact(first_name=first_name.strip(),last_name=last_name.strip(),display_name=f"{first_name.strip()} {last_name.strip()}".strip(),nickname=nickname or None,role=role or "Other",phone=phone or None,phone_normalized=digits(phone or ""),alternate_phone=alternate_phone or None,fax=fax or None,email=email or None,address=address or None,company_id=company_id,notes=notes or None,verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email,updated_by=user.email)
+    db.add(contact); db.commit(); db.refresh(contact); return RedirectResponse(f"/contacts/{contact.id}",303)
 @app.get("/contacts/{contact_id}",response_class=HTMLResponse)
 def contact_detail(contact_id:int,request:Request,db:Session=Depends(get_db),user:User=Depends(current_user)):
     c=db.execute(select(Contact).where(Contact.id==contact_id).options(joinedload(Contact.company),joinedload(Contact.project_links).joinedload(ProjectContact.project).joinedload(Project.property))).unique().scalar_one_or_none()

@@ -1,0 +1,10 @@
+{% extends 'base.html' %}{% block title %}Add contact · wmCRM{% endblock %}{% block content %}
+<a class="back" href="{{ request.headers.get('referer') or '/' }}">← Back</a>
+<div class="form-heading"><span class="eyebrow">New record</span><h1>Add a contact</h1><p>Add the person now. You can connect them to one or more project addresses afterward.</p></div>
+<form method="post" action="/contacts/new" class="card contact-form">
+  <fieldset><legend>Person</legend><div class="form-grid two"><label>First name <span>*</span><input name="first_name" required autofocus autocomplete="given-name"></label><label>Last name <span>*</span><input name="last_name" required autocomplete="family-name"></label></div><div class="form-grid two"><label>Nickname<input name="nickname" placeholder="Name your team uses"></label><label>General role<input name="role" placeholder="e.g. Superintendent" value="Other"><small>Project-specific roles can differ later.</small></label></div></fieldset>
+  <fieldset><legend>Company and contact details</legend><label>Company<select name="company_id"><option value="">No company / unknown</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.company_name }}</option>{% endfor %}</select></label><div class="form-grid two"><label>Primary phone<input name="phone" type="tel" autocomplete="tel"></label><label>Secondary phone<input name="alternate_phone" type="tel"></label><label>Email<input name="email" type="email" autocomplete="email"></label><label>Fax<input name="fax" type="tel"></label></div><label>Address<input name="address" autocomplete="street-address" placeholder="Optional office or mailing address"></label></fieldset>
+  <fieldset><legend>Notes</legend><label>Useful context<textarea name="notes" rows="4" placeholder="How you know this person, responsibilities, or follow-up details"></textarea></label></fieldset>
+  <div class="form-actions"><a href="/" class="cancel-button">Cancel</a><button type="submit">Save contact</button></div>
+</form>
+{% endblock %}
