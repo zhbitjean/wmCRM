@@ -2,6 +2,7 @@ import csv
 import io
 from pathlib import Path
 from openpyxl import load_workbook
+from .geography import infer_nyc_borough
 
 EXPECTED_HEADERS = {
     "name", "nickname", "company", "address", "office phone",
@@ -38,6 +39,7 @@ def map_client_row(row):
         "company_phone": office,
         "company_fax": normalized.get("fax"),
         "address": normalized.get("address"),
+        "borough": infer_nyc_borough(normalized.get("address")),
         "fax": normalized.get("fax"),
         "phone": cell or office,
         "alternate_phone": office if cell and office else None,

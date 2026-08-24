@@ -4,6 +4,7 @@ from app.models import ClientCompany,Contact,Project,ProjectContact,Property,Sta
 from app.search import directory_search, global_search
 from app.importers import map_client_row
 from app.duplicates import annotate_duplicate, find_duplicate
+from app.geography import infer_nyc_borough
 from conftest import login
 
 def sample(db):
@@ -34,10 +35,17 @@ def test_field_user_cannot_write(client):
 def test_admin_can_add_contact_directly(client,db):
     login(client)
     assert client.get("/contacts/new").status_code==200
-    response=client.post("/contacts/new",data={"first_name":"Dave","last_name":"Miller","nickname":"D","role":"Site Contact","phone":"212-555-0199","email":"dave@example.com","address":"2600 Amsterdam Ave, New York, NY","notes":"Secondary person in charge"},follow_redirects=False)
+    response=client.post("/contacts/new",data={"first_name":"Dave","last_name":"Miller","nickname":"D","role":"Site Contact","phone":"212-555-0199","email":"dave@example.com","address":"2600 Amsterdam Ave, New York, NY","borough":"Manhattan","notes":"Secondary person in charge"},follow_redirects=False)
     assert response.status_code==303 and response.headers["location"].startswith("/contacts/")
     db.expire_all(); dave=db.scalar(select(Contact).where(Contact.email=="dave@example.com"))
-    assert dave and dave.display_name=="Dave Miller" and dave.verification_status==VerificationStatus.VERIFIED
+    assert dave and dave.display_name=="Dave Miller" and dave.borough=="Manhattan" and dave.verification_status==VerificationStatus.VERIFIED
+
+def test_queens_borough_inference_and_lookup(db):
+    assert infer_nyc_borough("71-16 Myrtle Ave, Glendale, NY 11385")=="Queens"
+    assert infer_nyc_borough("138-16 57 Rd, Flushing, NY 11355")=="Queens"
+    contact=Contact(first_name="Queens",last_name="Contact",display_name="Queens Contact",address="86-25 Lefferts Blvd, Richmond Hill, NY",borough=infer_nyc_borough("86-25 Lefferts Blvd, Richmond Hill, NY"))
+    db.add(contact); db.commit(); contacts,_=directory_search(db,"queens")
+    assert contact in contacts
 def test_csv_review_and_approval(client,db):
     login(client)
     csv=b"entity_type,first_name,last_name,phone,email,role\ncontact,Jane,Doe,718-555-9000,jane@example.com,Owner\n"

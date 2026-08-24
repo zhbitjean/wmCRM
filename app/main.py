@@ -13,6 +13,7 @@ from .database import get_db
 from .models import ClientCompany, Contact, Project, ProjectContact, Property, StagedRecord, Unit, User, VerificationStatus
 from .importers import parse_csv, parse_current_client_xlsx
 from .duplicates import annotate_duplicate
+from .geography import BOROUGHS, infer_nyc_borough
 from .schemas import CompanyCreate, CompanyOut
 from .search import digits, directory_search, global_search
 
@@ -52,10 +53,10 @@ def company_detail(company_id:int,request:Request,db:Session=Depends(get_db),use
 @app.get("/contacts/new",response_class=HTMLResponse)
 def new_contact_page(request:Request,db:Session=Depends(get_db),user:User=Depends(office_user)):
     companies=db.scalars(select(ClientCompany).order_by(ClientCompany.company_name)).all()
-    return templates.TemplateResponse(request,"contact_form.html",{"companies":companies,"user":user})
+    return templates.TemplateResponse(request,"contact_form.html",{"companies":companies,"boroughs":BOROUGHS,"user":user})
 @app.post("/contacts/new")
-def create_contact_direct(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),alternate_phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),company_id:int|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
-    contact=Contact(first_name=first_name.strip(),last_name=last_name.strip(),display_name=f"{first_name.strip()} {last_name.strip()}".strip(),nickname=nickname or None,role=role or "Other",phone=phone or None,phone_normalized=digits(phone or ""),alternate_phone=alternate_phone or None,fax=fax or None,email=email or None,address=address or None,company_id=company_id,notes=notes or None,verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email,updated_by=user.email)
+def create_contact_direct(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),alternate_phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),borough:str|None=Form(None),company_id:int|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    contact=Contact(first_name=first_name.strip(),last_name=last_name.strip(),display_name=f"{first_name.strip()} {last_name.strip()}".strip(),nickname=nickname or None,role=role or "Other",phone=phone or None,phone_normalized=digits(phone or ""),alternate_phone=alternate_phone or None,fax=fax or None,email=email or None,address=address or None,borough=borough or infer_nyc_borough(address),company_id=company_id,notes=notes or None,verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email,updated_by=user.email)
     db.add(contact); db.commit(); db.refresh(contact); return RedirectResponse(f"/contacts/{contact.id}",303)
 @app.get("/contacts/{contact_id}",response_class=HTMLResponse)
 def contact_detail(contact_id:int,request:Request,db:Session=Depends(get_db),user:User=Depends(current_user)):
@@ -80,10 +81,10 @@ def add_company(company_name:str=Form(),phone:str|None=Form(None),email:str|None
 def add_contact(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),email:str|None=Form(None),company_id:int|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
     db.add(Contact(first_name=first_name,last_name=last_name,display_name=f"{first_name} {last_name}".strip(),nickname=nickname or None,role=role,phone=phone,phone_normalized=digits(phone or ""),email=email,company_id=company_id,created_by=user.email,updated_by=user.email)); db.commit(); return RedirectResponse("/admin",303)
 @app.post("/admin/contacts/{contact_id}")
-def update_contact(contact_id:int,display_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+def update_contact(contact_id:int,display_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),borough:str|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
     c=db.get(Contact,contact_id)
     if not c: raise HTTPException(404)
-    c.display_name=display_name; c.nickname=nickname or None; c.role=role; c.phone=phone; c.phone_normalized=digits(phone or ""); c.fax=fax or None; c.email=email; c.address=address or None; c.notes=notes; c.updated_by=user.email
+    c.display_name=display_name; c.nickname=nickname or None; c.role=role; c.phone=phone; c.phone_normalized=digits(phone or ""); c.fax=fax or None; c.email=email; c.address=address or None; c.borough=borough or infer_nyc_borough(address); c.notes=notes; c.updated_by=user.email
     db.commit(); return RedirectResponse(f"/contacts/{contact_id}",303)
 @app.post("/admin/import")
 async def import_file(file:UploadFile=File(),db:Session=Depends(get_db),user:User=Depends(office_user)):
@@ -112,7 +113,7 @@ def review(record_id:int,action:str,db:Session=Depends(get_db),user:User=Depends
     elif action in ("update-existing","merge"):
         if r.entity_type.lower()!="client_bundle" or not r.duplicate_contact_id: raise HTTPException(400,"No existing contact candidate is available")
         data=json.loads(r.payload_json); contact=db.get(Contact,r.duplicate_contact_id)
-        fields={"display_name":data.get("display_name"),"nickname":data.get("nickname"),"role":data.get("role"),"phone":data.get("phone"),"alternate_phone":data.get("alternate_phone"),"fax":data.get("fax"),"email":data.get("email"),"address":data.get("address"),"notes":data.get("notes")}
+        fields={"display_name":data.get("display_name"),"nickname":data.get("nickname"),"role":data.get("role"),"phone":data.get("phone"),"alternate_phone":data.get("alternate_phone"),"fax":data.get("fax"),"email":data.get("email"),"address":data.get("address"),"borough":data.get("borough") or infer_nyc_borough(data.get("address")),"notes":data.get("notes")}
         for key,value in fields.items():
             if value is not None and (action=="update-existing" or not getattr(contact,key,None)): setattr(contact,key,value)
         contact.phone_normalized=digits(contact.phone or "")
@@ -121,17 +122,17 @@ def review(record_id:int,action:str,db:Session=Depends(get_db),user:User=Depends
         r.status=VerificationStatus.VERIFIED; r.review_notes="Updated existing contact" if action=="update-existing" else "Merged missing fields into existing contact"
     elif action=="approve":
         data=json.loads(r.payload_json); kind=r.entity_type.lower()
-        if kind=="company": db.add(ClientCompany(company_name=data["company_name"],alternate_name=data.get("alternate_name"),phone=data.get("phone"),fax=data.get("fax"),email=data.get("email"),address=data.get("address"),notes=data.get("notes"),created_by=user.email))
+        if kind=="company": db.add(ClientCompany(company_name=data["company_name"],alternate_name=data.get("alternate_name"),phone=data.get("phone"),fax=data.get("fax"),email=data.get("email"),address=data.get("address"),borough=data.get("borough") or infer_nyc_borough(data.get("address")),notes=data.get("notes"),created_by=user.email))
         elif kind=="contact":
             first=data.get("first_name",""); last=data.get("last_name",""); phone=data.get("phone")
-            db.add(Contact(first_name=first,last_name=last,display_name=data.get("display_name") or f"{first} {last}".strip(),nickname=data.get("nickname") or None,role=data.get("role","Other"),phone=phone,phone_normalized=digits(phone or ""),email=data.get("email"),verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email))
+            db.add(Contact(first_name=first,last_name=last,display_name=data.get("display_name") or f"{first} {last}".strip(),nickname=data.get("nickname") or None,role=data.get("role","Other"),phone=phone,phone_normalized=digits(phone or ""),email=data.get("email"),address=data.get("address"),borough=data.get("borough") or infer_nyc_borough(data.get("address")),verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email))
         elif kind=="client_bundle":
             company=None; company_name=data.get("company_name")
             if company_name:
                 company=db.scalar(select(ClientCompany).where(ClientCompany.company_name.ilike(company_name)))
                 if not company:
-                    company=ClientCompany(company_name=company_name,phone=data.get("company_phone"),fax=data.get("company_fax"),email=data.get("email"),address=data.get("company_address"),created_by=user.email,updated_by=user.email); db.add(company); db.flush()
-            db.add(Contact(first_name=data.get("first_name") or "",last_name=data.get("last_name") or "",display_name=data["display_name"],nickname=data.get("nickname"),role=data.get("role") or "Client",phone=data.get("phone"),phone_normalized=digits(data.get("phone") or ""),alternate_phone=data.get("alternate_phone"),fax=data.get("fax"),email=data.get("email"),address=data.get("address"),company=company,notes=data.get("notes"),verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email,updated_by=user.email))
+                    company=ClientCompany(company_name=company_name,phone=data.get("company_phone"),fax=data.get("company_fax"),email=data.get("email"),address=data.get("company_address"),borough=data.get("borough") or infer_nyc_borough(data.get("company_address")),created_by=user.email,updated_by=user.email); db.add(company); db.flush()
+            db.add(Contact(first_name=data.get("first_name") or "",last_name=data.get("last_name") or "",display_name=data["display_name"],nickname=data.get("nickname"),role=data.get("role") or "Client",phone=data.get("phone"),phone_normalized=digits(data.get("phone") or ""),alternate_phone=data.get("alternate_phone"),fax=data.get("fax"),email=data.get("email"),address=data.get("address"),borough=data.get("borough") or infer_nyc_borough(data.get("address")),company=company,notes=data.get("notes"),verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email,updated_by=user.email))
         else: raise HTTPException(400,"Unsupported staged record type")
         r.status=VerificationStatus.VERIFIED
     else: raise HTTPException(400,"Unknown action")
