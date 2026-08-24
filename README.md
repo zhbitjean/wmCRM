@@ -58,8 +58,9 @@ For quick local evaluation, `DATABASE_URL=sqlite:///./wmcrm.db` is supported. Pr
 
 - `FIELD_USER`: global search and detail screens; phone and email links open the device dialer/mail app.
 - `OFFICE_USER` or `ADMIN`: field access plus `/admin`, contact corrections, CSV upload, and review actions.
-- CSV rows require `entity_type` (`contact` or `company`). Uploads become `PENDING`. Approve creates a verified production row; reject and needs-correction do not.
-- See `sample_import.csv`. Imports preserve source filename/type, timestamps, reviewer, and status.
+- Uploading `WM Client list.xlsx` reads the `current client list` tab directly and stages complete client rows. Name, nickname, company, address, office/fax/cell phones, notes, and email are mapped; placeholder `-` values are treated as blank.
+- CSV rows require `entity_type` (`contact` or `company`). All uploads become `PENDING`. Approve creates verified production rows; reject and needs-correction do not.
+- Imports preserve source filename/type, timestamps, reviewer, and status. Rows without a legal name are skipped and reported instead of creating ambiguous contacts.
 
 API documentation is at <http://localhost:8000/docs>.
 

@@ -1,7 +1,8 @@
 import io, json
 from sqlalchemy import select
 from app.models import ClientCompany,Contact,Project,ProjectContact,Property,StagedRecord,Unit,VerificationStatus
-from app.search import global_search
+from app.search import directory_search, global_search
+from app.importers import map_client_row
 from conftest import login
 
 def sample(db):
@@ -21,6 +22,8 @@ def test_global_search_all_key_fields(db):
     *_,project=sample(db)
     for query in ["155 Stuy","1K","David","gongji","ABC Construction","917-555-1234","gmail.com","Interior Reno"]:
         assert project in global_search(db,query), query
+    contacts,companies=directory_search(db,"gongji")
+    assert any(contact.nickname=="Gongji" for contact in contacts)
 def test_field_user_cannot_write(client):
     login(client,"field@test.com")
     assert client.get("/?q=155").status_code==200
@@ -33,3 +36,14 @@ def test_csv_review_and_approval(client,db):
     assert client.post(f"/admin/staged/{staged.id}/approve").status_code==200
     db.expire_all(); staged=db.get(StagedRecord,staged.id); jane=db.scalar(select(Contact).where(Contact.email=="jane@example.com"))
     assert staged.status==VerificationStatus.VERIFIED and jane.verification_status==VerificationStatus.VERIFIED
+
+def test_current_client_row_mapping_and_bundle_approval(client,db):
+    mapped=map_client_row({"Name":"Joseph Aghelian","Nickname":"Gongji","Company":"PSA Properties","Address":"79 Water Mill Lane, Great Neck, NY 11021","Office Phone":"(516) 216-1360","Fax":"(516) 216-1363","Cell Phone":"-","Notes":"Big Guy","Email":" joseph@psaproperties.com "})
+    assert mapped["nickname"]=="Gongji" and mapped["phone"]=="(516) 216-1360" and mapped["email"]=="joseph@psaproperties.com"
+    staged=StagedRecord(entity_type="client_bundle",payload_json=json.dumps(mapped),source_type="EXCEL",source_reference="WM Client list.xlsx / current client list")
+    db.add(staged); db.commit(); login(client)
+    assert client.post(f"/admin/staged/{staged.id}/approve").status_code==200
+    db.expire_all(); joseph=db.scalar(select(Contact).where(Contact.nickname=="Gongji")); company=db.scalar(select(ClientCompany).where(ClientCompany.company_name=="PSA Properties"))
+    assert joseph and joseph.company_id==company.id
+    assert company.address.startswith("79 Water Mill") and company.fax=="(516) 216-1363"
+    assert joseph.address.startswith("79 Water Mill") and joseph.fax=="(516) 216-1363"

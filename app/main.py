@@ -1,6 +1,7 @@
-import csv, io, json
+import json
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -10,8 +11,9 @@ from sqlalchemy.orm import Session, joinedload
 from .auth import current_user, make_token, office_user, verify_password
 from .database import get_db
 from .models import ClientCompany, Contact, Project, ProjectContact, Property, StagedRecord, Unit, User, VerificationStatus
+from .importers import parse_csv, parse_current_client_xlsx
 from .schemas import CompanyCreate, CompanyOut
-from .search import digits, global_search
+from .search import digits, directory_search, global_search
 
 app=FastAPI(title="wmCRM",version="0.1.0")
 BASE=Path(__file__).parent
@@ -34,8 +36,8 @@ def logout():
     response=RedirectResponse("/login",303); response.delete_cookie("access_token"); return response
 @app.get("/",response_class=HTMLResponse)
 def home(request:Request,q:str="",db:Session=Depends(get_db),user:User=Depends(current_user)):
-    results=global_search(db,q) if q.strip() else []
-    return templates.TemplateResponse(request,"home.html",{"q":q,"results":results,"user":user})
+    results=global_search(db,q) if q.strip() else []; contacts,companies=directory_search(db,q) if q.strip() else ([],[])
+    return templates.TemplateResponse(request,"home.html",{"q":q,"results":results,"contacts":contacts,"companies":companies,"total_results":len(results)+len(contacts)+len(companies),"user":user})
 @app.get("/projects/{project_id}",response_class=HTMLResponse)
 def project_detail(project_id:int,request:Request,db:Session=Depends(get_db),user:User=Depends(current_user)):
     p=db.scalar(select(Project).where(Project.id==project_id).options(joinedload(Project.property),joinedload(Project.unit),joinedload(Project.client_company),joinedload(Project.contact_links).joinedload(ProjectContact.contact).joinedload(Contact.company)))
@@ -68,17 +70,26 @@ def add_company(company_name:str=Form(),phone:str|None=Form(None),email:str|None
 def add_contact(first_name:str=Form(),last_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),email:str|None=Form(None),company_id:int|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
     db.add(Contact(first_name=first_name,last_name=last_name,display_name=f"{first_name} {last_name}".strip(),nickname=nickname or None,role=role,phone=phone,phone_normalized=digits(phone or ""),email=email,company_id=company_id,created_by=user.email,updated_by=user.email)); db.commit(); return RedirectResponse("/admin",303)
 @app.post("/admin/contacts/{contact_id}")
-def update_contact(contact_id:int,display_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),email:str|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
+def update_contact(contact_id:int,display_name:str=Form(),nickname:str|None=Form(None),role:str=Form("Other"),phone:str|None=Form(None),fax:str|None=Form(None),email:str|None=Form(None),address:str|None=Form(None),notes:str|None=Form(None),db:Session=Depends(get_db),user:User=Depends(office_user)):
     c=db.get(Contact,contact_id)
     if not c: raise HTTPException(404)
-    c.display_name=display_name; c.nickname=nickname or None; c.role=role; c.phone=phone; c.phone_normalized=digits(phone or ""); c.email=email; c.notes=notes; c.updated_by=user.email
+    c.display_name=display_name; c.nickname=nickname or None; c.role=role; c.phone=phone; c.phone_normalized=digits(phone or ""); c.fax=fax or None; c.email=email; c.address=address or None; c.notes=notes; c.updated_by=user.email
     db.commit(); return RedirectResponse(f"/contacts/{contact_id}",303)
 @app.post("/admin/import")
-async def import_csv(file:UploadFile=File(),db:Session=Depends(get_db),user:User=Depends(office_user)):
-    text=(await file.read()).decode("utf-8-sig"); reader=csv.DictReader(io.StringIO(text))
-    for row in reader:
-        kind=(row.pop("entity_type",None) or "contact").lower(); db.add(StagedRecord(entity_type=kind,payload_json=json.dumps(row),source_type="CSV",source_reference=file.filename,created_by=user.email))
-    db.commit(); return RedirectResponse("/admin",303)
+async def import_file(file:UploadFile=File(),db:Session=Depends(get_db),user:User=Depends(office_user)):
+    content=await file.read(); suffix=Path(file.filename or "").suffix.lower()
+    try:
+        if suffix==".xlsx":
+            rows,skipped=parse_current_client_xlsx(content); source_type="EXCEL"
+            for row in rows: db.add(StagedRecord(entity_type="client_bundle",payload_json=json.dumps(row),source_type=source_type,source_reference=f"{file.filename} / current client list",created_by=user.email))
+        elif suffix==".csv":
+            rows=parse_csv(content); skipped=[]; source_type="CSV"
+            for row in rows:
+                kind=(row.pop("entity_type",None) or "contact").lower(); db.add(StagedRecord(entity_type=kind,payload_json=json.dumps(row),source_type=source_type,source_reference=file.filename,created_by=user.email))
+        else: raise ValueError("Upload an .xlsx or .csv file")
+    except (ValueError,UnicodeDecodeError) as exc:
+        return RedirectResponse(f"/admin?import_error={quote(str(exc))}",303)
+    db.commit(); return RedirectResponse(f"/admin?imported={len(rows)}&skipped={len(skipped)}",303)
 @app.post("/admin/staged/{record_id}/{action}")
 def review(record_id:int,action:str,db:Session=Depends(get_db),user:User=Depends(office_user)):
     r=db.get(StagedRecord,record_id)
@@ -87,11 +98,18 @@ def review(record_id:int,action:str,db:Session=Depends(get_db),user:User=Depends
     elif action=="needs-correction": r.status=VerificationStatus.NEEDS_CORRECTION
     elif action=="approve":
         data=json.loads(r.payload_json); kind=r.entity_type.lower()
-        if kind=="company": db.add(ClientCompany(company_name=data["company_name"],alternate_name=data.get("alternate_name"),phone=data.get("phone"),email=data.get("email"),notes=data.get("notes"),created_by=user.email))
+        if kind=="company": db.add(ClientCompany(company_name=data["company_name"],alternate_name=data.get("alternate_name"),phone=data.get("phone"),fax=data.get("fax"),email=data.get("email"),address=data.get("address"),notes=data.get("notes"),created_by=user.email))
         elif kind=="contact":
             first=data.get("first_name",""); last=data.get("last_name",""); phone=data.get("phone")
             db.add(Contact(first_name=first,last_name=last,display_name=data.get("display_name") or f"{first} {last}".strip(),nickname=data.get("nickname") or None,role=data.get("role","Other"),phone=phone,phone_normalized=digits(phone or ""),email=data.get("email"),verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email))
-        else: raise HTTPException(400,"MVP approval supports contact and company records")
+        elif kind=="client_bundle":
+            company=None; company_name=data.get("company_name")
+            if company_name:
+                company=db.scalar(select(ClientCompany).where(ClientCompany.company_name.ilike(company_name)))
+                if not company:
+                    company=ClientCompany(company_name=company_name,phone=data.get("company_phone"),fax=data.get("company_fax"),email=data.get("email"),address=data.get("company_address"),created_by=user.email,updated_by=user.email); db.add(company); db.flush()
+            db.add(Contact(first_name=data.get("first_name") or "",last_name=data.get("last_name") or "",display_name=data["display_name"],nickname=data.get("nickname"),role=data.get("role") or "Client",phone=data.get("phone"),phone_normalized=digits(data.get("phone") or ""),alternate_phone=data.get("alternate_phone"),fax=data.get("fax"),email=data.get("email"),address=data.get("address"),company=company,notes=data.get("notes"),verification_status=VerificationStatus.VERIFIED,last_verified_at=datetime.now(timezone.utc),created_by=user.email,updated_by=user.email))
+        else: raise HTTPException(400,"Unsupported staged record type")
         r.status=VerificationStatus.VERIFIED
     else: raise HTTPException(400,"Unknown action")
     r.verified_by=user.email; r.verified_at=datetime.now(timezone.utc); r.updated_by=user.email; db.commit(); return RedirectResponse("/admin",303)
