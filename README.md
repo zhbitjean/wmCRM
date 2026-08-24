@@ -1,4 +1,4 @@
-# wmCRM MVP
+# WM CRM MVP
 
 A small, mobile-first internal lookup system for architecture/design field teams. It keeps clients, people, properties, units, projects, and per-project roles relational while offering one broad search box.
 

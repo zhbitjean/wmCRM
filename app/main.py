@@ -17,7 +17,7 @@ from .geography import BOROUGHS, infer_nyc_borough
 from .schemas import CompanyCreate, CompanyOut
 from .search import digits, directory_search, global_search
 
-app=FastAPI(title="wmCRM",version="0.1.0")
+app=FastAPI(title="WM CRM",version="0.1.0")
 BASE=Path(__file__).parent
 app.mount("/static",StaticFiles(directory=BASE/"static"),name="static")
 templates=Jinja2Templates(directory=BASE/"templates")

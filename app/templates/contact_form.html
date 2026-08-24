@@ -1,4 +1,4 @@
-{% extends 'base.html' %}{% block title %}Add contact · wmCRM{% endblock %}{% block content %}
+{% extends 'base.html' %}{% block title %}Add contact · WM CRM{% endblock %}{% block content %}
 <a class="back" href="{{ request.headers.get('referer') or '/' }}">← Back</a>
 <div class="form-heading"><span class="eyebrow">New record</span><h1>Add a contact</h1><p>Add the person now. You can connect them to one or more project addresses afterward.</p></div>
 <form method="post" action="/contacts/new" class="card contact-form">
